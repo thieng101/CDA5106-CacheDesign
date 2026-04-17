@@ -7,12 +7,11 @@
 # CFLAGS variable.  You may want to comment out the DEBUG option before
 # running your simulations.
 
-JAVAC = javac
-DEBUG = -g
-CFLAGS = $(DEBUG) -deprecation
+all:
+	javac sim_cache.java
 
-sim_cache:
-	$(JAVAC) $(CFLAGS) sim_cache.java
+run:
+	java sim_cache
 	
 # type "make clean" to remove all your .class files
 clean:
