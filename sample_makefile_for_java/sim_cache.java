@@ -12,23 +12,27 @@ class Block {
 class Cache {
 	int size, assoc, blockSize, numSets;
 	int replacement;
+	int inclusion;
 	List<Block[]> sets;
 	long time = 0;
 
 	int reads = 0, readMisses=0;
 	int writes = 0, writeMisses = 0;
 	int writeBacks = 0;
+	int invalidationWriteBacks = 0;
 
 	Cache nextLevel = null;
+	Cache upperLevel = null;
 
 	Map<Integer, Queue<Integer>> futureAccesses;
 	int currentIndex = 0;
 
-	Cache(int size, int assoc, int blockSize, int replacement, Map<Integer, Queue<Integer>> futureAccesses) {
+	Cache(int size, int assoc, int blockSize, int replacement, int inclusion, Map<Integer, Queue<Integer>> futureAccesses) {
 		this.size = size;
 		this.assoc = assoc;
 		this.blockSize = blockSize;
 		this.replacement = replacement;
+		this.inclusion = inclusion;
 		this.futureAccesses = futureAccesses;
 
 		if (size == 0)
@@ -36,6 +40,7 @@ class Cache {
 
 		numSets = size / (assoc * blockSize);
 		sets = new ArrayList<>();
+
 		for (int i = 0; i < numSets; i++) {
 			Block[] set = new Block[assoc];
 			for (int j = 0; j < assoc; j++)
@@ -57,6 +62,26 @@ class Cache {
 	int getBlockAddr(int addr)
 	{
 		return addr / blockSize;
+	}
+
+	int reconstructAddr(int index, int tag) {
+		return (tag * numSets + index) * blockSize;
+	}
+
+	void invalidateBlock(int addr) {
+		int index = getSetIndex(addr);
+		int tag = getTag(addr);
+
+		for (Block block : sets.get(index)) {
+			if (block.valid && block.tag == tag) {
+				if (block.dirty) 
+					invalidationWriteBacks++;
+
+				block.valid = false;
+				block.dirty = false;
+				break;
+			}
+		}
 	}
 
 	void access(int addr, char op) {
@@ -139,12 +164,19 @@ class Cache {
 			}
 		}
 
-		// Write back if dirty
-		if (victim.valid && victim.dirty) {
-			writeBacks++;
-			if (nextLevel != null) {
-				int victimAddr = (victim.tag * numSets + setIndex) * blockSize;
-				nextLevel.access(victimAddr, 'w');
+		// Evict
+		if (victim.valid) {
+			int victimAddr = reconstructAddr(setIndex, victim.tag);
+
+			if (victim.dirty) {
+				writeBacks++;
+				if (nextLevel != null) {
+					nextLevel.access(victimAddr, 'w');
+				}
+			}
+
+			if (inclusion == 1 && upperLevel != null) {
+				upperLevel.invalidateBlock(victimAddr);
 			}
 		}
 
@@ -205,12 +237,13 @@ class sim_cache {
 		Map<Integer, Queue<Integer>> future = null;
         if (replacement == 2) future = buildFuture(traceFile, blockSize);
 
-		Cache L1 = new Cache(l1Size, l1Assoc, blockSize, replacement, future);
+		Cache L1 = new Cache(l1Size, l1Assoc, blockSize, replacement, inclusion, future);
 		Cache L2 = null;
 
 		if (l2Size > 0) {
-			L2 = new Cache(l2Size, l2Assoc, blockSize, replacement, future);
+			L2 = new Cache(l2Size, l2Assoc, blockSize, replacement, inclusion, future);
 			L1.nextLevel = L2;
+			L2.upperLevel = L1;
 		}
 
 		BufferedReader bReader = new BufferedReader(new FileReader(traceFile));
@@ -263,6 +296,26 @@ class sim_cache {
 			System.out.println();
 		}
 
+		if (L2 != null) {
+			System.out.println("===== L2 contents =====");
+			for (int i = 0; i < L2.numSets; i++) {
+				System.out.printf("Set%6d:%8s", i, "");
+				Block[] set = L2.sets.get(i);
+				for (Block b : set) {
+					if (b.valid) {
+						String tagHex = Integer.toHexString(b.tag);
+						if (b.dirty)
+							System.out.printf("%-8s ", tagHex + " D");
+						else
+							System.out.printf("%-8s ", tagHex);
+					} else {
+						System.out.printf("%-8s ", "0");
+					}
+				}
+				System.out.println();
+			}
+		}
+
 		// Simulation results
 		System.out.println("===== Simulation results (raw) =====");
         System.out.printf("a. number of L1 reads:%12d%n", L1.reads);
@@ -284,7 +337,10 @@ class sim_cache {
             System.out.printf("k. L2 miss rate:%14.6f%n", l2MissRate);
             System.out.printf("l. number of L2 writebacks:%5d%n", L2.writeBacks);
 
-            int traffic = L2.readMisses + L2.writeMisses + L2.writeBacks;
+			int traffic = L2.readMisses + L2.writeMisses + L2.writeBacks;
+			if (inclusion == 1) { // inclusive
+				traffic += L1.invalidationWriteBacks;
+			}
             System.out.printf("m. total memory traffic:%6d%n", traffic);
         } else {
             System.out.printf("g. number of L2 reads:%12d%n", 0);
