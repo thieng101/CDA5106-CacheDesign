@@ -11,7 +11,7 @@ class Block {
 
 class Cache {
 	int size, assoc, blockSize, numSets;
-	int replacementPolicy;
+	int replacement;
 	List<Block[]> sets;
 	long time = 0;
 
@@ -21,11 +21,15 @@ class Cache {
 
 	Cache nextLevel = null;
 
-	Cache(int size, int assoc, int blockSize, int replacementPolicy) {
+	Map<Integer, Queue<Integer>> futureAccesses;
+	int currentIndex = 0;
+
+	Cache(int size, int assoc, int blockSize, int replacement, Map<Integer, Queue<Integer>> futureAccesses) {
 		this.size = size;
 		this.assoc = assoc;
 		this.blockSize = blockSize;
-		this.replacementPolicy = replacementPolicy;
+		this.replacement = replacement;
+		this.futureAccesses = futureAccesses;
 
 		if (size == 0)
 			return;
@@ -50,6 +54,11 @@ class Cache {
 		return (addr / blockSize) / numSets;
 	}
 
+	int getBlockAddr(int addr)
+	{
+		return addr / blockSize;
+	}
+
 	void access(int addr, char op) {
 		if (size == 0)
 			return;
@@ -61,6 +70,15 @@ class Cache {
 		
 		int setIndex = getSetIndex(addr);
 		int tag = getTag(addr);
+		int blockAddr = getBlockAddr(addr);
+
+		// update future accesses for optimal policy
+		if (replacement == 2) {
+			Queue<Integer> q = futureAccesses.get(blockAddr);
+			if (q != null && !q.isEmpty())
+				q.poll();
+		}
+
 		Block[] set = sets.get(setIndex);
 
 		//HIT
@@ -89,14 +107,34 @@ class Cache {
 		}
 
 		if (victim == null) {
-			victim = set[0];
-			for (Block block : set) {
-				if (replacementPolicy == 0) { // LRU
+			if (replacement == 0) { // LRU
+				victim = set[0];
+				for (Block block : set) 
 					if (block.lastUsed < victim.lastUsed)
 						victim = block;
-				} else { // FIFO
+			} else if (replacement == 1) { // FIFO
+				victim = set[0];
+				for (Block block : set)
 					if (block.inserted < victim.inserted)
 						victim = block;
+			} else { // Optimal
+				victim = set[0];
+				int farthest = -1;
+
+				for (Block b : set) {
+					int bAddr = b.tag * numSets + setIndex;
+					Queue<Integer> q = futureAccesses.get(bAddr);
+
+					if (q == null || q.isEmpty()) {
+						victim = b;
+						break;
+					}
+
+					int nextUse = q.peek();
+					if (nextUse > farthest) {
+						farthest = nextUse;
+						victim = b;
+					}
 				}
 			}
 		}
@@ -125,6 +163,29 @@ class Cache {
 }
 
 class sim_cache {
+	static Map<Integer, Queue<Integer>> buildFuture(String traceFile, int blockSize) throws Exception {
+		Map<Integer, Queue<Integer>> map = new HashMap<>();
+		BufferedReader br = new BufferedReader(new FileReader(traceFile));
+		String line;
+		int index = 0;
+
+		while ((line = br.readLine()) != null) {
+			line = line.trim();
+			if (line.isEmpty())
+				continue;
+
+			String[] parts = line.split(" ");
+			int addr = Integer.parseInt(parts[1], 16);
+			int blockAddr = addr / blockSize;
+
+			map.putIfAbsent(blockAddr, new LinkedList<>());
+			map.get(blockAddr).add(index);
+			index++;
+		}
+		br.close();
+		return map;
+	}
+	
 	public static void main(String[] args) throws Exception {
 		if (args.length != 8) {
 			System.out.println(
@@ -137,14 +198,18 @@ class sim_cache {
 		int l1Assoc = Integer.parseInt(args[2]);
 		int l2Size = Integer.parseInt(args[3]);
 		int l2Assoc = Integer.parseInt(args[4]);
-		int replacementPolicy = Integer.parseInt(args[5]);
+		int replacement = Integer.parseInt(args[5]);
+		int inclusion = Integer.parseInt(args[6]);
 		String traceFile = args[7];
 
-		Cache L1 = new Cache(l1Size, l1Assoc, blockSize, replacementPolicy);
+		Map<Integer, Queue<Integer>> future = null;
+        if (replacement == 2) future = buildFuture(traceFile, blockSize);
+
+		Cache L1 = new Cache(l1Size, l1Assoc, blockSize, replacement, future);
 		Cache L2 = null;
 
 		if (l2Size > 0) {
-			L2 = new Cache(l2Size, l2Assoc, blockSize, replacementPolicy);
+			L2 = new Cache(l2Size, l2Assoc, blockSize, replacement, future);
 			L1.nextLevel = L2;
 		}
 
@@ -166,7 +231,7 @@ class sim_cache {
 		bReader.close();
 
 		// Output
-		String replacementPolicyString = (replacementPolicy == 0) ? "LRU" : (replacementPolicy == 1) ? "FIFO" : "optimal";
+		String replacementPolicyString = (replacement == 0) ? "LRU" : (replacement == 1) ? "FIFO" : "optimal";
         String inclusiveString = (Integer.parseInt(args[6]) == 0) ? "non-inclusive" : "inclusive";
 
 		System.out.println("===== Simulator configuration =====");
