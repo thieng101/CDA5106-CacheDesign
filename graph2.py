@@ -13,7 +13,7 @@ INCLUSION = 0     # non-inclusive
 sizes_kb = [1,2,4,8,16,32,64,128,256,512,1024]
 assocs = [1,2,4,8]
 
-HT_L1 =1 # replace later with CACTI value
+HT_L1 = 0.27125 
 MISS_PENALTY = 100
 
 def run_sim(size_bytes, assoc):
